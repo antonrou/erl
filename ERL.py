@@ -5,7 +5,6 @@ import copy
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.patches import Patch
-from numba import jit, vectorize, float64
 
 # --- CONFIGURATION & CONSTANTS ---
 
@@ -23,8 +22,8 @@ GENOME_BITS_PER_WEIGHT = 4
 GENOME_LENGTH = TOTAL_WEIGHTS * GENOME_BITS_PER_WEIGHT
 
 # Learning Constants (CRBP)
-LEARNING_RATE_POS = 0.01 # Increased from 0.02
-LEARNING_RATE_NEG = 0.001 # Increased from 0.005
+LEARNING_RATE_POS = 0.05 # Increased from 0.02
+LEARNING_RATE_NEG = 0.01 # Increased from 0.005
 NOISE_PROB = 0.02       # "v" parameter in CRBP, effective temperature
 
 # Simulation Constants
@@ -68,12 +67,8 @@ DIRS = [(0, -1), (1, 0), (0, 1), (-1, 0)] # x, y changes
 
 # --- HELPER FUNCTIONS ---
 
-@vectorize([float64(float64)])
 def sigmoid(x):
-    # Manual clip for Numba scalar compatibility
-    if x < -20.0: return 0.0
-    if x > 20.0: return 1.0
-    return 1.0 / (1.0 + math.exp(-x))
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -20, 20))) # Clipped for stability
 
 def bits_to_weight(bits):
     """Decodes 4 bits into a weight value.
@@ -82,7 +77,6 @@ def bits_to_weight(bits):
     # Map 0..15 to -3.75 .. +3.75
     return (val - 7.5) / 5.0 # Reduced range [-1.5, 1.5] to prevent saturation
 
-@jit(nopython=True)
 def get_distance_value(dist, max_dist):
     """Paper: 'value from 0.5 to 1.0 proportional to closeness'"""
     if dist > max_dist: return 0.0 
@@ -715,14 +709,9 @@ class Visualizer:
 
 # --- MAIN RUNNER ---
 
-def run_simulation(strategy='ERL', visualize=True, max_steps=1000000, log_progress=True, learning_rate_pos=None, learning_rate_neg=None):
-    global SIM_STRATEGY, LEARNING_RATE_POS, LEARNING_RATE_NEG
+def run_simulation(strategy='ERL', visualize=True, max_steps=10000):
+    global SIM_STRATEGY
     SIM_STRATEGY = strategy
-    
-    if learning_rate_pos is not None:
-        LEARNING_RATE_POS = learning_rate_pos
-    if learning_rate_neg is not None:
-        LEARNING_RATE_NEG = learning_rate_neg
     
     world = World()
     vis = None
@@ -744,7 +733,7 @@ def run_simulation(strategy='ERL', visualize=True, max_steps=1000000, log_progre
             
             if t % 100 == 0:
                 # Only print if visualizing or infrequent
-                if log_progress:
+                if visualize:
                     avg_fitness = 0
                     if world.agents:
                         avg_fitness = sum(a.energy for a in world.agents) / len(world.agents)
