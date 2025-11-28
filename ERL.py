@@ -731,6 +731,11 @@ def run_simulation(strategy='ERL', visualize=True, max_steps=10000):
             if visualize and t % 10 == 0:
                 vis.update(world)
             
+            if t % 1000 == 0:
+                # Print progress even if not visualizing to debug hangs
+                if not visualize:
+                    print(f"Step {t}...", flush=True)
+
             if t % 100 == 0:
                 # Only print if visualizing or infrequent
                 if visualize:
