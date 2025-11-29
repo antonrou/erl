@@ -594,8 +594,9 @@ class World:
 
     def spawn_agent_near(self, x, y, genome):
         # Try adjacent cells
-        random.shuffle(DIRS)
-        for dx, dy in DIRS:
+        dirs = list(DIRS)
+        random.shuffle(dirs)
+        for dx, dy in dirs:
             nx, ny = x + dx, y + dy
             if self.add_entity(ERLAgent(nx, ny, genome)):
                 return
@@ -603,8 +604,9 @@ class World:
         self.add_entity(ERLAgent(random.randint(1,98), random.randint(1,98), genome))
 
     def spawn_carnivore_near(self, x, y):
-        random.shuffle(DIRS)
-        for dx, dy in DIRS:
+        dirs = list(DIRS)
+        random.shuffle(dirs)
+        for dx, dy in dirs:
             nx, ny = x + dx, y + dy
             if self.add_entity(Carnivore(nx, ny)):
                 return
