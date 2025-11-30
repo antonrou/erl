@@ -329,7 +329,7 @@ class ERLAgent(Entity):
             delta_energy = self.energy - self.prev_energy
             delta_health = (self.health - self.prev_health) * 100.0
             # Normalize reward: Add back movement cost so standard move is 0.0
-            r = delta_energy + delta_health + ENERGY_COST_MOVE
+            r = current_eval - self.prev_eval
             
             # Noise Gate: Removed to allow learning from small signals
             # if abs(r) < 1.5:
