@@ -136,7 +136,146 @@ def run_experiments(strategies=None):
         print(f"J = - | Phi_ann - Phi_prog | = {J:.1f}")
 
     plot_results(results)
+    plot_kaplan_meier(results)
+    perform_log_rank_test(results)
     return results
+
+def perform_log_rank_test(results):
+    print("\n--- Log-Rank Test (Mantel-Cox) ---")
+    if 'ERL' not in results or 'Programmatic' not in results:
+        print("Cannot perform Log-Rank Test: Missing 'ERL' or 'Programmatic' data.")
+        return
+
+    # Prepare data for Group 1 (ERL) and Group 2 (Programmatic)
+    groups = {'ERL': results['ERL'], 'Programmatic': results['Programmatic']}
+    
+    # Extract times and events
+    # Event: 1 if died (steps < MAX_STEPS), 0 if censored (steps == MAX_STEPS)
+    data = {}
+    for name, res in groups.items():
+        steps = np.array([r[0] for r in res])
+        events = (steps < MAX_STEPS).astype(int)
+        data[name] = {'steps': steps, 'events': events}
+
+    # Combine all unique event times from both groups
+    all_steps = np.concatenate([data['ERL']['steps'], data['Programmatic']['steps']])
+    all_events = np.concatenate([data['ERL']['events'], data['Programmatic']['events']])
+    
+    # Only consider times where at least one event (death) occurred
+    event_times = np.unique(all_steps[all_events == 1])
+    event_times.sort()
+    
+    if len(event_times) == 0:
+        print("No death events occurred in either group. Cannot perform Log-Rank Test.")
+        return
+
+    # Calculate O_i (Observed) and E_i (Expected) for each group
+    # We only need to calculate for one group (say ERL), the other is complementary
+    
+    O_1_total = 0 # Total observed deaths in Group 1
+    E_1_total = 0 # Total expected deaths in Group 1
+    V_total = 0   # Total variance
+    
+    for t in event_times:
+        # Group 1 (ERL)
+        n_1j = np.sum(data['ERL']['steps'] >= t) # Number at risk
+        d_1j = np.sum((data['ERL']['steps'] == t) & (data['ERL']['events'] == 1)) # Deaths
+        
+        # Group 2 (Programmatic)
+        n_2j = np.sum(data['Programmatic']['steps'] >= t)
+        d_2j = np.sum((data['Programmatic']['steps'] == t) & (data['Programmatic']['events'] == 1))
+        
+        # Total
+        n_j = n_1j + n_2j
+        d_j = d_1j + d_2j
+        
+        if n_j == 0: continue
+            
+        # Expected deaths for Group 1
+        E_1j = n_1j * d_j / n_j
+        
+        # Variance contribution
+        # V_j = (n_1j * n_2j * d_j * (n_j - d_j)) / (n_j^2 * (n_j - 1))
+        if n_j > 1:
+            V_j = (n_1j * n_2j * d_j * (n_j - d_j)) / (n_j**2 * (n_j - 1))
+        else:
+            V_j = 0
+            
+        O_1_total += d_1j
+        E_1_total += E_1j
+        V_total += V_j
+
+    # Test Statistic Z
+    # Z = (O_1 - E_1) / sqrt(V)
+    if V_total > 0:
+        Z = (O_1_total - E_1_total) / np.sqrt(V_total)
+        Chi_sq = Z**2
+        
+        print(f"Observed Deaths (ERL): {O_1_total}")
+        print(f"Expected Deaths (ERL): {E_1_total:.2f}")
+        print(f"Chi-squared Statistic: {Chi_sq:.4f}")
+        
+        # Critical value for df=1, alpha=0.05 is 3.841
+        critical_value = 3.841
+        p_value_approx = " < 0.05" if Chi_sq > critical_value else " >= 0.05"
+        significance = "Significant" if Chi_sq > critical_value else "Not Significant"
+        
+        print(f"Critical Value (alpha=0.05): {critical_value}")
+        print(f"Result: {significance} difference (p{p_value_approx})")
+        print("Null Hypothesis: Survival curves are identical.")
+    else:
+        print("Variance is zero. Cannot calculate Z-statistic.")
+
+def plot_kaplan_meier(results):
+    plt.figure(figsize=(10, 6))
+    
+    for strategy, data in results.items():
+        # Extract steps and determine if event occurred (death) or censored (survived max steps)
+        steps = np.array([d[0] for d in data])
+        events = (steps < MAX_STEPS).astype(int) # 1 if died, 0 if survived (censored)
+        
+        # Sort by time
+        sorted_indices = np.argsort(steps)
+        sorted_steps = steps[sorted_indices]
+        sorted_events = events[sorted_indices]
+        
+        # Unique times where events occurred
+        unique_times = np.unique(sorted_steps)
+        
+        # Calculate S(t)
+        survival_probs = [1.0]
+        times = [0]
+        
+        current_survival = 1.0
+        n_total = len(steps)
+        
+        for t in unique_times:
+            # n_i: number at risk (survived >= t)
+            n_i = np.sum(sorted_steps >= t)
+            
+            # d_i: number of deaths at time t
+            d_i = np.sum((sorted_steps == t) & (sorted_events == 1))
+            
+            if n_i > 0:
+                current_survival *= (1 - d_i / n_i)
+            
+            times.append(t)
+            survival_probs.append(current_survival)
+            
+        # Step plot
+        plt.step(times, survival_probs, where='post', label=strategy)
+        
+    plt.title('Kaplan-Meier Survival Curve')
+    plt.xlabel('Time (Steps)')
+    plt.ylabel('Survival Probability S(t)')
+    plt.ylim(0, 1.05)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.legend()
+    
+    output_file = 'kaplan_meier_survival_curve.png'
+    plt.savefig(output_file)
+    print(f"Kaplan-Meier plot saved to {output_file}")
+    plt.close()
 
 def plot_results(results):
     num_strategies = len(results)
