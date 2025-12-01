@@ -99,8 +99,8 @@ def main():
     
     # Plot Plants
     plt.figure(figsize=(10, 6))
-    plt.plot(history['steps'], history['plant_eval'], label='Plant-Evaluation', color='green', linestyle='-')
-    plt.plot(history['steps'], history['plant_action'], label='Plant-Action', color='green', linestyle='--')
+    plt.plot(history['steps'], history['plant_eval'], label='Plant-Evaluation', color='green', linestyle='--')
+    plt.plot(history['steps'], history['plant_action'], label='Plant-Action', color='green', linestyle='-')
     plt.xlabel('Time Steps')
     plt.ylabel('Average Weight Value')
     plt.title('Genetic Changes Over Time (Plants)')
@@ -111,8 +111,8 @@ def main():
 
     # Plot Carnivores
     plt.figure(figsize=(10, 6))
-    plt.plot(history['steps'], history['carnivore_eval'], label='Carnivore-Evaluation', color='red', linestyle='-')
-    plt.plot(history['steps'], history['carnivore_action'], label='Carnivore-Action', color='red', linestyle='--')
+    plt.plot(history['steps'], history['carnivore_eval'], label='Carnivore-Evaluation', color='red', linestyle='--')
+    plt.plot(history['steps'], history['carnivore_action'], label='Carnivore-Action', color='red', linestyle='-')
     plt.xlabel('Time Steps')
     plt.ylabel('Average Weight Value')
     plt.title('Genetic Changes Over Time (Carnivores)')

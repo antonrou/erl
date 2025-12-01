@@ -750,6 +750,40 @@ class Visualizer:
     def close(self):
         plt.close(self.fig)
 
+# Indices for inputs (N, E, S, W)
+PLANT_INDICES = [2, 8, 14, 20]
+CARNIVORE_INDICES = [4, 10, 16, 22]
+
+def get_population_metrics(world):
+    agents = world.agents
+    if not agents:
+        return None
+        
+    plant_eval_vals = []
+    plant_action_vals = []
+    carnivore_eval_vals = []
+    carnivore_action_vals = []
+    
+    for agent in agents:
+        # Eval weights
+        pe = np.mean([agent.w_eval[i][0] for i in PLANT_INDICES])
+        ce = np.mean([agent.w_eval[i][0] for i in CARNIVORE_INDICES])
+        plant_eval_vals.append(pe)
+        carnivore_eval_vals.append(ce)
+        
+        # Action weights (mean of absolute values)
+        pa = np.mean([np.mean(np.abs(agent.w_action[i])) for i in PLANT_INDICES])
+        ca = np.mean([np.mean(np.abs(agent.w_action[i])) for i in CARNIVORE_INDICES])
+        plant_action_vals.append(pa)
+        carnivore_action_vals.append(ca)
+        
+    return {
+        'plant_eval': np.mean(plant_eval_vals),
+        'plant_action': np.mean(plant_action_vals),
+        'carnivore_eval': np.mean(carnivore_eval_vals),
+        'carnivore_action': np.mean(carnivore_action_vals)
+    }
+
 # --- MAIN RUNNER ---
 
 def run_simulation(strategy='ERL', visualize=True, max_steps=10000, seed=None, step_callback=None):
@@ -766,10 +800,14 @@ def run_simulation(strategy='ERL', visualize=True, max_steps=10000, seed=None, s
     if visualize:
         vis = Visualizer(WORLD_WIDTH, WORLD_HEIGHT)
     
-    # print(f"Starting Simulation. Strategy: {strategy}")
-    # print(f"Initial Agents: {len(world.agents)}")
-    # print(f"Initial Carnivores: {len(world.carnivores)}")
-    # print(f"Initial Plants: {len(world.plants)}")
+    # History storage
+    history = {
+        'steps': [],
+        'plant_eval': [],
+        'plant_action': [],
+        'carnivore_eval': [],
+        'carnivore_action': []
+    }
     
     # Run loop
     try:
@@ -778,6 +816,16 @@ def run_simulation(strategy='ERL', visualize=True, max_steps=10000, seed=None, s
             
             if step_callback:
                 step_callback(t, world)
+            
+            # Collect metrics every 100 steps
+            if t % 100 == 0:
+                metrics = get_population_metrics(world)
+                if metrics:
+                    history['steps'].append(t)
+                    history['plant_eval'].append(metrics['plant_eval'])
+                    history['plant_action'].append(metrics['plant_action'])
+                    history['carnivore_eval'].append(metrics['carnivore_eval'])
+                    history['carnivore_action'].append(metrics['carnivore_action'])
             
             if visualize and t % 10 == 0:
                 vis.update(world)
@@ -797,13 +845,13 @@ def run_simulation(strategy='ERL', visualize=True, max_steps=10000, seed=None, s
                 
             if len(world.agents) == 0:
                 if visualize: print("Extinction event.")
-                return t
+                return t, history
         
-        return max_steps
+        return max_steps, history
                 
     except KeyboardInterrupt:
         print("Simulation stopped by user.")
-        return t
+        return t, history
     finally:
         if vis:
             vis.close()

@@ -1,20 +1,53 @@
 import ERL
+import programmatic_erl
 import matplotlib.pyplot as plt
 import numpy as np
 import time
 import multiprocessing
 
 # Configuration for Quick Verification
-STRATEGIES = ['ERL', 'E', 'L', 'F', 'B']
-TRIALS_PER_STRATEGY = 30 # Reduced for quick baseline
-MAX_STEPS = 2000 # Reduced from 1,000,000
+STRATEGIES = ['ERL', 'E', 'L', 'F', 'B', 'Programmatic']
+TRIALS_PER_STRATEGY = 100 # Reduced for quick baseline
+MAX_STEPS = 2000
+
+# Shielding Parameters
+SHIELDING_DELTA = 0.07
+SHIELDING_TAU = 0.2 # 20% of time
 
 def run_single_trial(strategy, trial_num, seed_offset):
     # Use trial_num + offset as seed for reproducibility within a run, but variance across runs
     current_seed = trial_num + seed_offset
     # print(f"[{strategy}] Starting Trial {trial_num+1}/{TRIALS_PER_STRATEGY} (Seed: {current_seed})")
-    steps = ERL.run_simulation(strategy=strategy, visualize=False, max_steps=MAX_STEPS, seed=current_seed)
-    return steps, current_seed
+    if strategy == 'Programmatic':
+        steps, history = programmatic_erl.run_simulation(strategy=strategy, visualize=False, max_steps=MAX_STEPS, seed=current_seed)
+    else:
+        steps, history = ERL.run_simulation(strategy=strategy, visualize=False, max_steps=MAX_STEPS, seed=current_seed)
+    return steps, current_seed, history
+
+def calculate_shielding(history, delta=SHIELDING_DELTA, tau=SHIELDING_TAU):
+    # Check if shielding occurs: Fact - Feval > delta for >= tau fraction of time
+    # We check for Plants (primary task)
+    
+    # history lists are sampled every 100 steps.
+    # We iterate through the collected points.
+    
+    steps = history['steps']
+    if not steps:
+        return False
+        
+    T = len(steps)
+    shielding_count = 0
+    
+    for i in range(T):
+        fact = history['carnivore_action'][i]
+        feval = history['carnivore_eval'][i]
+        
+        diff = fact - feval
+        if diff > delta:
+            shielding_count += 1
+            
+    fraction = shielding_count / T
+    return fraction >= tau
 
 def run_experiments(strategies=None):
     if strategies is None:
@@ -46,8 +79,8 @@ def run_experiments(strategies=None):
                 
                 if res.ready():
                     try:
-                        steps, seed = res.get()
-                        results[strategy].append((steps, seed))
+                        steps, seed, history = res.get()
+                        results[strategy].append((steps, seed, history))
                         all_async_results[idx] = (strategy, trial_num, None)
                         finished_count += 1
                         # print(f"[{strategy}] Trial {trial_num+1} finished: {steps}")
@@ -70,6 +103,38 @@ def run_experiments(strategies=None):
         survived_full = sum(1 for x in steps_data if x >= MAX_STEPS)
         print(f"{s}: Avg={avg:.1f}, Median={med:.1f}, Survived Full Duration={survived_full}/{TRIALS_PER_STRATEGY}")
     
+    # Calculate Shielding Prominence for ERL and Programmatic
+    phi_values = {}
+    for strategy_name in ['ERL', 'Programmatic']:
+        if strategy_name in results:
+            data = results[strategy_name]
+            survivors = [r for r in data if r[0] >= MAX_STEPS]
+            
+            print(f"\n--- Shielding Prominence ({strategy_name}) ---")
+            if survivors:
+                shielding_runs = 0
+                for steps, seed, history in survivors:
+                    if calculate_shielding(history):
+                        shielding_runs += 1
+                
+                phi = (shielding_runs / len(survivors)) * 100.0
+                phi_values[strategy_name] = phi
+                print(f"Total Survivors: {len(survivors)}")
+                print(f"Shielding Occurred in: {shielding_runs}")
+                print(f"Shielding Prominence (Phi): {phi:.1f}%")
+            else:
+                print(f"No {strategy_name} trials survived full duration. Cannot calculate shielding.")
+
+    # Calculate Quality of Imitation (J)
+    if 'ERL' in phi_values and 'Programmatic' in phi_values:
+        phi_ann = phi_values['ERL']
+        phi_prog = phi_values['Programmatic']
+        J = - abs(phi_ann - phi_prog)
+        print(f"\n--- Quality of Imitation ---")
+        print(f"Phi_ann (ERL): {phi_ann:.1f}%")
+        print(f"Phi_prog (Programmatic): {phi_prog:.1f}%")
+        print(f"J = - | Phi_ann - Phi_prog | = {J:.1f}")
+
     plot_results(results)
     return results
 
