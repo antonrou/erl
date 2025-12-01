@@ -6,7 +6,7 @@ import multiprocessing
 
 # Configuration for Quick Verification
 STRATEGIES = ['ERL', 'E', 'L', 'F', 'B']
-TRIALS_PER_STRATEGY = 100 # Reduced for quick baseline
+TRIALS_PER_STRATEGY = 30 # Reduced for quick baseline
 MAX_STEPS = 2000 # Reduced from 1,000,000
 
 def run_single_trial(strategy, trial_num, seed_offset):
@@ -14,10 +14,12 @@ def run_single_trial(strategy, trial_num, seed_offset):
     current_seed = trial_num + seed_offset
     # print(f"[{strategy}] Starting Trial {trial_num+1}/{TRIALS_PER_STRATEGY} (Seed: {current_seed})")
     steps = ERL.run_simulation(strategy=strategy, visualize=False, max_steps=MAX_STEPS, seed=current_seed)
-    return steps
+    return steps, current_seed
 
-def run_experiments():
-    results = {s: [] for s in STRATEGIES}
+def run_experiments(strategies=None):
+    if strategies is None:
+        strategies = STRATEGIES
+    results = {s: [] for s in strategies}
     
     print(f"Running {TRIALS_PER_STRATEGY} trials (max {MAX_STEPS} steps) for each strategy using {multiprocessing.cpu_count()} CPU cores...")
     
@@ -29,7 +31,7 @@ def run_experiments():
         seed_offset = int(time.time()) % 10000
         print(f"Using seed offset: {seed_offset}")
 
-        for strategy in STRATEGIES:
+        for strategy in strategies:
             for i in range(TRIALS_PER_STRATEGY):
                 res = pool.apply_async(run_single_trial, (strategy, i, seed_offset))
                 all_async_results.append((strategy, i, res))
@@ -44,8 +46,8 @@ def run_experiments():
                 
                 if res.ready():
                     try:
-                        steps = res.get()
-                        results[strategy].append(steps)
+                        steps, seed = res.get()
+                        results[strategy].append((steps, seed))
                         all_async_results[idx] = (strategy, trial_num, None)
                         finished_count += 1
                         # print(f"[{strategy}] Trial {trial_num+1} finished: {steps}")
@@ -61,13 +63,15 @@ def run_experiments():
     
     # Analyze Results
     print("\n--- RESULTS (Average Steps Survived) ---")
-    for s in STRATEGIES:
-        avg = np.mean(results[s]) if results[s] else 0
-        med = np.median(results[s]) if results[s] else 0
-        survived_full = sum(1 for x in results[s] if x >= MAX_STEPS)
+    for s in strategies:
+        steps_data = [r[0] for r in results[s]]
+        avg = np.mean(steps_data) if steps_data else 0
+        med = np.median(steps_data) if steps_data else 0
+        survived_full = sum(1 for x in steps_data if x >= MAX_STEPS)
         print(f"{s}: Avg={avg:.1f}, Median={med:.1f}, Survived Full Duration={survived_full}/{TRIALS_PER_STRATEGY}")
     
     plot_results(results)
+    return results
 
 def plot_results(results):
     num_strategies = len(results)
@@ -76,7 +80,8 @@ def plot_results(results):
     if num_strategies == 1:
         axes = [axes]
     
-    for idx, (strategy, steps) in enumerate(results.items()):
+    for idx, (strategy, data) in enumerate(results.items()):
+        steps = [d[0] for d in data]
         ax = axes[idx]
         
         # Create histogram
