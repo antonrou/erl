@@ -10,6 +10,12 @@ K_CLAUSES = 2
 ACTION_SPACE_SIZE = 4 
 INPUT_DIM = INPUT_SIZE
 
+# Strategy Configuration
+# Programmatic: Evolution + Learning (default)
+# PE: Programmatic Evolution only (no learning)
+# PL: Programmatic Learning only (no inheritance)
+SIM_STRATEGY = 'Programmatic'
+
 def sigmoid(x):
     # Clip x to prevent overflow/underflow warnings
     x = np.clip(x, -500, 500)
@@ -199,7 +205,8 @@ class ProgrammaticERLAgent(ERLAgent):
         current_eval = self.compute_evaluation(current_input)
 
         # --- LEARNING STEP (CRBP-style sign(r) + early stopping) ---
-        if not self.just_born and hasattr(self, 'prev_input') and hasattr(self, 'prev_action_idx'):
+        # Programmatic and PL learn. PE does not.
+        if SIM_STRATEGY in ['Programmatic', 'PL'] and not self.just_born and hasattr(self, 'prev_input') and hasattr(self, 'prev_action_idx'):
             # Same "physics reward": delta in internal evaluation
             r = current_eval - self.prev_eval
 
@@ -331,18 +338,24 @@ class ProgrammaticERLAgent(ERLAgent):
     def check_reproduction(self, world):
         if self.energy > REPRODUCE_ENERGY_THRESHOLD:
             child_genome = None
-            mate = world.find_closest_mate(self)
-            if mate and isinstance(mate, ProgrammaticERLAgent):
-                child_genome = self.genome.crossover(mate.genome)
-            else:
-                # Clone
-                child_genome = ProgrammaticGenome()
-                child_genome.action_clauses = [copy_clause(c) for c in self.genome.action_clauses]
-                child_genome.eval_clauses = [copy_clause(c) for c in self.genome.eval_clauses]
-                child_genome.eval_bias = self.genome.eval_bias
             
-            # Evolution strategy: Gaussian noise (standard for Programmatic/Float genomes)
-            child_genome.mutate()
+            if SIM_STRATEGY == 'PL':
+                # Learning only - no inheritance, random genome
+                child_genome = ProgrammaticGenome()
+            else:
+                # Evolution (Programmatic, PE) - Inheritance
+                mate = world.find_closest_mate(self)
+                if mate and isinstance(mate, ProgrammaticERLAgent):
+                    child_genome = self.genome.crossover(mate.genome)
+                else:
+                    # Clone
+                    child_genome = ProgrammaticGenome()
+                    child_genome.action_clauses = [copy_clause(c) for c in self.genome.action_clauses]
+                    child_genome.eval_clauses = [copy_clause(c) for c in self.genome.eval_clauses]
+                    child_genome.eval_bias = self.genome.eval_bias
+                
+                # Evolution strategy: Gaussian noise (standard for Programmatic/Float genomes)
+                child_genome.mutate()
             
             self.energy -= REPRODUCE_COST
             world.spawn_agent_near(self.x, self.y, child_genome)
@@ -424,6 +437,8 @@ def get_population_metrics(world):
     }
 
 def run_simulation(strategy='Programmatic', visualize=True, max_steps=10000, seed=None, step_callback=None):
+    global SIM_STRATEGY
+    SIM_STRATEGY = strategy
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)

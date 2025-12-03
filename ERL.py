@@ -53,7 +53,7 @@ PLANT_GROWTH_PROB = 0.005 # Very scarce food
 PLANT_MAX_DENSITY_NEIGHBORS = 4
 TREE_BIRTH_PROB = 0.001 # Infrequent
 TREE_DEATH_PROB = 0.001 # Infrequent
-CORPSE_DECAY_RATE = 1.0 # Energy lost per tick for corpses
+CORPSE_DECAY_RATE = 0.3 # Energy lost per tick for corpses
 
 # Object Types IDs
 TYPE_EMPTY = 0

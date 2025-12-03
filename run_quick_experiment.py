@@ -4,50 +4,35 @@ import matplotlib.pyplot as plt
 import numpy as np
 import time
 import multiprocessing
+import pandas as pd
+from lifelines import CoxPHFitter
 
 # Configuration for Quick Verification
-STRATEGIES = ['ERL', 'E', 'L', 'F', 'B', 'Programmatic']
+STRATEGIES = ['ERL', 'E', 'L', 'F', 'Programmatic', 'PE', 'PL', 'B']
 TRIALS_PER_STRATEGY = 100 # Reduced for quick baseline
 MAX_STEPS = 2000
 
-# Shielding Parameters
-SHIELDING_DELTA = 0.07
-SHIELDING_TAU = 0.2 # 20% of time
+# Strategy display names for plot legends
+STRATEGY_LABELS = {
+    'E': 'NE',
+    'L': 'NL',
+    'F': 'NF',
+    'Programmatic': 'PERL',
+    'ERL': 'NERL',
+    'PE': 'PE',
+    'PL': 'PL',
+    'B': 'B'
+}
 
 def run_single_trial(strategy, trial_num, seed_offset):
     # Use trial_num + offset as seed for reproducibility within a run, but variance across runs
     current_seed = trial_num + seed_offset
     # print(f"[{strategy}] Starting Trial {trial_num+1}/{TRIALS_PER_STRATEGY} (Seed: {current_seed})")
-    if strategy == 'Programmatic':
+    if strategy in ['Programmatic', 'PE', 'PL']:
         steps, history = programmatic_erl.run_simulation(strategy=strategy, visualize=False, max_steps=MAX_STEPS, seed=current_seed)
     else:
         steps, history = ERL.run_simulation(strategy=strategy, visualize=False, max_steps=MAX_STEPS, seed=current_seed)
     return steps, current_seed, history
-
-def calculate_shielding(history, delta=SHIELDING_DELTA, tau=SHIELDING_TAU):
-    # Check if shielding occurs: Fact - Feval > delta for >= tau fraction of time
-    # We check for Plants (primary task)
-    
-    # history lists are sampled every 100 steps.
-    # We iterate through the collected points.
-    
-    steps = history['steps']
-    if not steps:
-        return False
-        
-    T = len(steps)
-    shielding_count = 0
-    
-    for i in range(T):
-        fact = history['carnivore_action'][i]
-        feval = history['carnivore_eval'][i]
-        
-        diff = fact - feval
-        if diff > delta:
-            shielding_count += 1
-            
-    fraction = shielding_count / T
-    return fraction >= tau
 
 def run_experiments(strategies=None):
     if strategies is None:
@@ -103,42 +88,91 @@ def run_experiments(strategies=None):
         survived_full = sum(1 for x in steps_data if x >= MAX_STEPS)
         print(f"{s}: Avg={avg:.1f}, Median={med:.1f}, Survived Full Duration={survived_full}/{TRIALS_PER_STRATEGY}")
     
-    # Calculate Shielding Prominence for ERL and Programmatic
-    phi_values = {}
-    for strategy_name in ['ERL', 'Programmatic']:
-        if strategy_name in results:
-            data = results[strategy_name]
-            survivors = [r for r in data if r[0] >= MAX_STEPS]
-            
-            print(f"\n--- Shielding Prominence ({strategy_name}) ---")
-            if survivors:
-                shielding_runs = 0
-                for steps, seed, history in survivors:
-                    if calculate_shielding(history):
-                        shielding_runs += 1
-                
-                phi = (shielding_runs / len(survivors)) * 100.0
-                phi_values[strategy_name] = phi
-                print(f"Total Survivors: {len(survivors)}")
-                print(f"Shielding Occurred in: {shielding_runs}")
-                print(f"Shielding Prominence (Phi): {phi:.1f}%")
-            else:
-                print(f"No {strategy_name} trials survived full duration. Cannot calculate shielding.")
-
-    # Calculate Quality of Imitation (J)
-    if 'ERL' in phi_values and 'Programmatic' in phi_values:
-        phi_ann = phi_values['ERL']
-        phi_prog = phi_values['Programmatic']
-        J = - abs(phi_ann - phi_prog)
-        print(f"\n--- Quality of Imitation ---")
-        print(f"Phi_ann (ERL): {phi_ann:.1f}%")
-        print(f"Phi_prog (Programmatic): {phi_prog:.1f}%")
-        print(f"J = - | Phi_ann - Phi_prog | = {J:.1f}")
-
-    plot_results(results)
     plot_kaplan_meier(results)
     perform_log_rank_test(results)
+    perform_cox_ph_analysis(results)
     return results
+
+def perform_cox_ph_analysis(results):
+    """
+    Perform Cox Proportional Hazards regression to compare Programmatic ERL vs Neural ERL.
+    
+    Outputs:
+    - Hazard Ratio (HR)
+    - 95% Confidence Interval
+    - p-value
+    """
+    print("\n--- Cox Proportional Hazards Analysis ---")
+    if 'ERL' not in results or 'Programmatic' not in results:
+        print("Cannot perform Cox PH Analysis: Missing 'ERL' or 'Programmatic' data.")
+        return
+    
+    # Prepare data
+    times = []
+    death_flags = []
+    strategy_labels = []
+    
+    # Add ERL data
+    for steps, seed, history in results['ERL']:
+        times.append(steps)
+        death_flags.append(1 if steps < MAX_STEPS else 0)  # 1 = death, 0 = censored
+        strategy_labels.append("neural")
+    
+    # Add Programmatic data
+    for steps, seed, history in results['Programmatic']:
+        times.append(steps)
+        death_flags.append(1 if steps < MAX_STEPS else 0)
+        strategy_labels.append("programmatic")
+    
+    # Create DataFrame
+    df = pd.DataFrame({
+        "time": times,
+        "event": death_flags,
+        "strategy": strategy_labels,
+    })
+    
+    # Create binary variable: 1 for programmatic, 0 for neural
+    df["strategy_binary"] = (df["strategy"] == "programmatic").astype(int)
+    
+    # Drop the original string 'strategy' column
+    df = df.drop(columns=['strategy'])
+    
+    # Fit Cox PH model
+    cph = CoxPHFitter()
+    cph.fit(df, duration_col="time", event_col="event")
+    
+    # Extract results
+    summary = cph.summary
+    
+    print("\nCox PH Model Summary:")
+    print(f"{'Covariate':<20} {'Hazard Ratio':<15} {'95% CI':<25} {'p-value':<10}")
+    print("-" * 70)
+    
+    for idx in summary.index:
+        hr = summary.loc[idx, 'exp(coef)']
+        ci_lower = summary.loc[idx, 'exp(coef) lower 95%']
+        ci_upper = summary.loc[idx, 'exp(coef) upper 95%']
+        p_val = summary.loc[idx, 'p']
+        
+        ci_str = f"({ci_lower:.3f}, {ci_upper:.3f})"
+        print(f"{idx:<20} {hr:<15.3f} {ci_str:<25} {p_val:<10.4f}")
+    
+    print("\nInterpretation:")
+    hr_prog = summary.loc['strategy_binary', 'exp(coef)']
+    p_val = summary.loc['strategy_binary', 'p']
+    
+    if hr_prog > 1:
+        risk_change = (hr_prog - 1) * 100
+        print(f"Programmatic ERL has {risk_change:.1f}% higher hazard of death than Neural ERL (HR={hr_prog:.3f}).")
+    else:
+        risk_reduction = (1 - hr_prog) * 100
+        print(f"Programmatic ERL has {risk_reduction:.1f}% lower hazard of death than Neural ERL (HR={hr_prog:.3f}).")
+    
+    if p_val < 0.05:
+        print(f"This difference is statistically significant (p={p_val:.4f}).")
+    else:
+        print(f"This difference is not statistically significant (p={p_val:.4f}).")
+
 
 def perform_log_rank_test(results):
     print("\n--- Log-Rank Test (Mantel-Cox) ---")
@@ -186,7 +220,7 @@ def perform_log_rank_test(results):
         d_2j = np.sum((data['Programmatic']['steps'] == t) & (data['Programmatic']['events'] == 1))
         
         # Total
-        n_j = n_1j + n_2j
+        n_j = n_1j + n_2j3
         d_j = d_1j + d_2j
         
         if n_j == 0: continue
@@ -226,6 +260,7 @@ def perform_log_rank_test(results):
     else:
         print("Variance is zero. Cannot calculate Z-statistic.")
 
+
 def plot_kaplan_meier(results):
     plt.figure(figsize=(10, 6))
     
@@ -263,9 +298,10 @@ def plot_kaplan_meier(results):
             survival_probs.append(current_survival)
             
         # Step plot
-        plt.step(times, survival_probs, where='post', label=strategy)
+        label = STRATEGY_LABELS.get(strategy, strategy)
+        plt.step(times, survival_probs, where='post', label=label)
         
-    plt.title('Kaplan-Meier Survival Curve')
+    plt.title(f"Kaplan–Meier Survival Curves Across Strategies (N={TRIALS_PER_STRATEGY} per strategy)")
     plt.xlabel('Time (Steps)')
     plt.ylabel('Survival Probability S(t)')
     plt.ylim(0, 1.05)
@@ -277,44 +313,6 @@ def plot_kaplan_meier(results):
     print(f"Kaplan-Meier plot saved to {output_file}")
     plt.close()
 
-def plot_results(results):
-    num_strategies = len(results)
-    fig, axes = plt.subplots(num_strategies, 1, figsize=(10, 4 * num_strategies), sharex=True, sharey=True)
-    
-    if num_strategies == 1:
-        axes = [axes]
-    
-    for idx, (strategy, data) in enumerate(results.items()):
-        steps = [d[0] for d in data]
-        ax = axes[idx]
-        
-        # Create histogram
-        # Bins: 20 bins spanning from 0 to MAX_STEPS
-        bins = np.linspace(0, MAX_STEPS, 21)
-        ax.hist(steps, bins=bins, color='skyblue', edgecolor='black', alpha=0.7)
-        
-        ax.set_title(f'Strategy: {strategy}')
-        ax.set_ylabel('Frequency (Trials)')
-        ax.grid(axis='y', linestyle='--', alpha=0.7)
-        
-        # Set x-ticks to match bins
-        ax.set_xticks(bins)
-        ax.tick_params(axis='x', rotation=45)
-        
-        # Add mean/median lines
-        avg = np.mean(steps) if steps else 0
-        med = np.median(steps) if steps else 0
-        ax.axvline(avg, color='red', linestyle='dashed', linewidth=1, label=f'Mean: {avg:.1f}')
-        ax.axvline(med, color='green', linestyle='dashed', linewidth=1, label=f'Median: {med:.1f}')
-        ax.legend()
-
-    plt.xlabel('Steps Survived')
-    plt.tight_layout()
-    
-    output_file = 'experiment_results_distribution.png'
-    plt.savefig(output_file)
-    print(f"\nPlot saved to {output_file}")
-    plt.close()
 
 if __name__ == "__main__":
     try:
