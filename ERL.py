@@ -721,7 +721,7 @@ class Visualizer:
         plt.ion()
         self.fig, self.ax = plt.subplots(figsize=(8, 8))
         self.img = self.ax.imshow(np.zeros((width, height)), cmap=self.cmap, norm=self.norm, interpolation='nearest')
-        plt.title("ERL Simulation")
+        plt.title("ERL Simulation", fontsize=30)
         plt.axis('off')
         
         # Legend
@@ -733,7 +733,7 @@ class Visualizer:
             Patch(facecolor='red', edgecolor='gray', label='Carnivore'),
             Patch(facecolor='blue', edgecolor='gray', label='Agent')
         ]
-        self.ax.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(1.3, 1))
+        self.ax.legend(handles=legend_elements, loc='upper left', bbox_to_anchor=(1.02, 1), prop={'size': 25})
         plt.tight_layout()
         
     def update(self, world):

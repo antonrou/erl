@@ -5,11 +5,13 @@ import numpy as np
 import time
 import multiprocessing
 import pandas as pd
-from lifelines import CoxPHFitter
+from lifelines import CoxPHFitter, KaplanMeierFitter
+from lifelines.utils import restricted_mean_survival_time
+from scipy.stats import norm
 
 # Configuration for Quick Verification
 STRATEGIES = ['ERL', 'E', 'L', 'F', 'Programmatic', 'PE', 'PL', 'B']
-TRIALS_PER_STRATEGY = 100 # Reduced for quick baseline
+TRIALS_PER_STRATEGY = 500 # Reduced for quick baseline
 MAX_STEPS = 2000
 
 # Strategy display names for plot legends
@@ -90,88 +92,119 @@ def run_experiments(strategies=None):
     
     plot_kaplan_meier(results)
     perform_log_rank_test(results)
-    perform_cox_ph_analysis(results)
-    return results
+    perform_rmst_analysis(results)
 
-def perform_cox_ph_analysis(results):
+
+
+
+def perform_rmst_analysis(results):
     """
-    Perform Cox Proportional Hazards regression to compare Programmatic ERL vs Neural ERL.
-    
-    Outputs:
-    - Hazard Ratio (HR)
-    - 95% Confidence Interval
-    - p-value
+    Perform Restricted Mean Survival Time (RMST) analysis.
+    Calculates RMST, standard error, and compares Programmatic vs ERL.
     """
-    print("\n--- Cox Proportional Hazards Analysis ---")
+    print("\n--- Restricted Mean Survival Time (RMST) Analysis ---")
     if 'ERL' not in results or 'Programmatic' not in results:
-        print("Cannot perform Cox PH Analysis: Missing 'ERL' or 'Programmatic' data.")
-        return
+        print("Note: 'ERL' or 'Programmatic' missing, skipping specific comparison.")
+
+    tau = MAX_STEPS
+    print(f"Time Horizon (tau): {tau} steps")
     
-    # Prepare data
-    times = []
-    death_flags = []
-    strategy_labels = []
+    analysis_data = {}
     
-    # Add ERL data
-    for steps, seed, history in results['ERL']:
-        times.append(steps)
-        death_flags.append(1 if steps < MAX_STEPS else 0)  # 1 = death, 0 = censored
-        strategy_labels.append("neural")
+    # Calculate RMST for ALL strategies
+    print(f"{'Strategy':<15} {'RMST':<10} {'SE':<10} {'95% CI':<20}")
+    print("-" * 60)
     
-    # Add Programmatic data
-    for steps, seed, history in results['Programmatic']:
-        times.append(steps)
-        death_flags.append(1 if steps < MAX_STEPS else 0)
-        strategy_labels.append("programmatic")
-    
-    # Create DataFrame
-    df = pd.DataFrame({
-        "time": times,
-        "event": death_flags,
-        "strategy": strategy_labels,
-    })
-    
-    # Create binary variable: 1 for programmatic, 0 for neural
-    df["strategy_binary"] = (df["strategy"] == "programmatic").astype(int)
-    
-    # Drop the original string 'strategy' column
-    df = df.drop(columns=['strategy'])
-    
-    # Fit Cox PH model
-    cph = CoxPHFitter()
-    cph.fit(df, duration_col="time", event_col="event")
-    
-    # Extract results
-    summary = cph.summary
-    
-    print("\nCox PH Model Summary:")
-    print(f"{'Covariate':<20} {'Hazard Ratio':<15} {'95% CI':<25} {'p-value':<10}")
-    print("-" * 70)
-    
-    for idx in summary.index:
-        hr = summary.loc[idx, 'exp(coef)']
-        ci_lower = summary.loc[idx, 'exp(coef) lower 95%']
-        ci_upper = summary.loc[idx, 'exp(coef) upper 95%']
-        p_val = summary.loc[idx, 'p']
+    for strategy in results.keys():
+        steps = np.array([r[0] for r in results[strategy]])
+        if len(steps) == 0:
+            continue
+            
+        events = (steps < MAX_STEPS).astype(int)
         
-        ci_str = f"({ci_lower:.3f}, {ci_upper:.3f})"
-        print(f"{idx:<20} {hr:<15.3f} {ci_str:<25} {p_val:<10.4f}")
-    
-    print("\nInterpretation:")
-    hr_prog = summary.loc['strategy_binary', 'exp(coef)']
-    p_val = summary.loc['strategy_binary', 'p']
-    
-    if hr_prog > 1:
-        risk_change = (hr_prog - 1) * 100
-        print(f"Programmatic ERL has {risk_change:.1f}% higher hazard of death than Neural ERL (HR={hr_prog:.3f}).")
-    else:
-        risk_reduction = (1 - hr_prog) * 100
-        print(f"Programmatic ERL has {risk_reduction:.1f}% lower hazard of death than Neural ERL (HR={hr_prog:.3f}).")
-    
-    if p_val < 0.05:
-        print(f"This difference is statistically significant (p={p_val:.4f}).")
-    else:
-        print(f"This difference is not statistically significant (p={p_val:.4f}).")
+        kmf = KaplanMeierFitter()
+        kmf.fit(steps, event_observed=events, label=strategy)
+        
+        # Calculate RMST
+        rmst = restricted_mean_survival_time(kmf, t=tau)
+        
+        # Calculate Variance of RMST (Greenwood-type approximation)
+        event_times = kmf.event_table.index[kmf.event_table['observed'] > 0]
+        event_table = kmf.event_table.loc[event_times]
+        
+        var_rmst = 0
+        survival_function = kmf.survival_function_
+        
+        for t_i in event_times:
+            if t_i >= tau:
+                break
+                
+            d_i = event_table.loc[t_i, 'observed']
+            n_i = event_table.loc[t_i, 'at_risk']
+            
+            if n_i <= d_i:
+                continue
+                
+            # Calculate area under S(t) from t_i to tau
+            mask = (survival_function.index >= t_i) & (survival_function.index <= tau)
+            times_in_range = survival_function.index[mask]
+            
+            if len(times_in_range) == 0:
+                continue
+            
+            # Efficient calculation of area under step function
+            relevant_times = survival_function.index.values
+            relevant_times = relevant_times[relevant_times >= t_i]
+            relevant_times = relevant_times[relevant_times < tau]
+            relevant_times = np.append(relevant_times, tau)
+            relevant_times = np.unique(relevant_times)
+            
+            area = 0
+            for k in range(len(relevant_times) - 1):
+                t_start = relevant_times[k]
+                t_end = relevant_times[k+1]
+                s_val = kmf.predict(t_start)
+                area += s_val * (t_end - t_start)
+            
+            term = (area**2) * d_i / (n_i * (n_i - d_i))
+            var_rmst += term
+            
+        se_rmst = np.sqrt(var_rmst)
+        analysis_data[strategy] = {'rmst': rmst, 'se': se_rmst, 'n': len(steps)}
+        
+        ci_lower = rmst - 1.96 * se_rmst
+        ci_upper = rmst + 1.96 * se_rmst
+        print(f"{strategy:<15} {rmst:<10.2f} {se_rmst:<10.2f} ({ci_lower:.1f}, {ci_upper:.1f})")
+
+    # Compare Programmatic vs ERL if both exist
+    if 'Programmatic' in analysis_data and 'ERL' in analysis_data:
+        rmst1 = analysis_data['Programmatic']['rmst']
+        se1 = analysis_data['Programmatic']['se']
+        
+        rmst2 = analysis_data['ERL']['rmst']
+        se2 = analysis_data['ERL']['se']
+        
+        diff = rmst1 - rmst2
+        se_diff = np.sqrt(se1**2 + se2**2)
+        
+        z_score = diff / se_diff
+        p_value = 2 * (1 - norm.cdf(abs(z_score)))
+        
+        ci_lower = diff - 1.96 * se_diff
+        ci_upper = diff + 1.96 * se_diff
+        
+        print("-" * 60)
+        print(f"Difference (Programmatic - ERL): {diff:.2f}")
+        print(f"95% CI: ({ci_lower:.2f}, {ci_upper:.2f})")
+        print(f"Z-score: {z_score:.4f}")
+        print(f"p-value: {p_value:.4f}")
+        
+        if p_value < 0.05:
+            print("Result: Statistically Significant Difference")
+        else:
+            print("Result: No Statistically Significant Difference")
+    print("-" * 60)
+    print("-" * 60)
 
 
 def perform_log_rank_test(results):
@@ -220,7 +253,7 @@ def perform_log_rank_test(results):
         d_2j = np.sum((data['Programmatic']['steps'] == t) & (data['Programmatic']['events'] == 1))
         
         # Total
-        n_j = n_1j + n_2j3
+        n_j = n_1j + n_2j
         d_j = d_1j + d_2j
         
         if n_j == 0: continue
@@ -269,44 +302,18 @@ def plot_kaplan_meier(results):
         steps = np.array([d[0] for d in data])
         events = (steps < MAX_STEPS).astype(int) # 1 if died, 0 if survived (censored)
         
-        # Sort by time
-        sorted_indices = np.argsort(steps)
-        sorted_steps = steps[sorted_indices]
-        sorted_events = events[sorted_indices]
-        
-        # Unique times where events occurred
-        unique_times = np.unique(sorted_steps)
-        
-        # Calculate S(t)
-        survival_probs = [1.0]
-        times = [0]
-        
-        current_survival = 1.0
-        n_total = len(steps)
-        
-        for t in unique_times:
-            # n_i: number at risk (survived >= t)
-            n_i = np.sum(sorted_steps >= t)
-            
-            # d_i: number of deaths at time t
-            d_i = np.sum((sorted_steps == t) & (sorted_events == 1))
-            
-            if n_i > 0:
-                current_survival *= (1 - d_i / n_i)
-            
-            times.append(t)
-            survival_probs.append(current_survival)
-            
-        # Step plot
+        kmf = KaplanMeierFitter()
         label = STRATEGY_LABELS.get(strategy, strategy)
-        plt.step(times, survival_probs, where='post', label=label)
+        kmf.fit(steps, event_observed=events, label=label)
         
-    plt.title(f"Kaplan–Meier Survival Curves Across Strategies (N={TRIALS_PER_STRATEGY} per strategy)")
+        # Plot with confidence bands (default in lifelines)
+        kmf.plot_survival_function()
+        
+    plt.title(f"Kaplan–Meier Survival Curves (N={TRIALS_PER_STRATEGY} per strategy)\nwith 95% Confidence Bands (Greenwood)")
     plt.xlabel('Time (Steps)')
     plt.ylabel('Survival Probability S(t)')
     plt.ylim(0, 1.05)
     plt.grid(True, linestyle='--', alpha=0.7)
-    plt.legend()
     
     output_file = 'kaplan_meier_survival_curve.png'
     plt.savefig(output_file)
