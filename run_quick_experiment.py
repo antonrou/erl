@@ -11,7 +11,7 @@ from scipy.stats import norm
 
 # Configuration for Quick Verification
 STRATEGIES = ['ERL', 'E', 'L', 'F', 'Programmatic', 'PE', 'PL', 'B']
-TRIALS_PER_STRATEGY = 500 # Reduced for quick baseline
+TRIALS_PER_STRATEGY = 1000 # Reduced for quick baseline
 MAX_STEPS = 2000
 
 # Strategy display names for plot legends
@@ -123,7 +123,8 @@ def perform_rmst_analysis(results):
         events = (steps < MAX_STEPS).astype(int)
         
         kmf = KaplanMeierFitter()
-        kmf.fit(steps, event_observed=events, label=strategy)
+        label = STRATEGY_LABELS.get(strategy, strategy)
+        kmf.fit(steps, event_observed=events, label=label)
         
         # Calculate RMST
         rmst = restricted_mean_survival_time(kmf, t=tau)
@@ -174,7 +175,7 @@ def perform_rmst_analysis(results):
         
         ci_lower = rmst - 1.96 * se_rmst
         ci_upper = rmst + 1.96 * se_rmst
-        print(f"{strategy:<15} {rmst:<10.2f} {se_rmst:<10.2f} ({ci_lower:.1f}, {ci_upper:.1f})")
+        print(f"{label:<15} {rmst:<10.2f} {se_rmst:<10.2f} ({ci_lower:.1f}, {ci_upper:.1f})")
 
     # Compare Programmatic vs ERL if both exist
     if 'Programmatic' in analysis_data and 'ERL' in analysis_data:
@@ -193,8 +194,11 @@ def perform_rmst_analysis(results):
         ci_lower = diff - 1.96 * se_diff
         ci_upper = diff + 1.96 * se_diff
         
+        label_prog = STRATEGY_LABELS.get('Programmatic', 'Programmatic')
+        label_erl = STRATEGY_LABELS.get('ERL', 'ERL')
+        
         print("-" * 60)
-        print(f"Difference (Programmatic - ERL): {diff:.2f}")
+        print(f"Difference ({label_prog} - {label_erl}): {diff:.2f}")
         print(f"95% CI: ({ci_lower:.2f}, {ci_upper:.2f})")
         print(f"Z-score: {z_score:.4f}")
         print(f"p-value: {p_value:.4f}")
@@ -297,6 +301,39 @@ def perform_log_rank_test(results):
 def plot_kaplan_meier(results):
     plt.figure(figsize=(10, 6))
     
+    # Define custom styles
+    colors = {
+        'Programmatic': 'red', 'PE': 'red', 'PL': 'red',
+        'ERL': 'blue', 'E': 'blue', 'L': 'blue', 'F': 'blue',
+        'B': 'black'
+    }
+    
+    # Line Styles: (offset, (on_off_pattern)) or string
+    styles = {
+        'Programmatic': '-',        # Solid
+        'ERL': '-',                 # Solid
+        'PE': (0, (3, 2)),          # Short dashes
+        'E': (0, (3, 2)),           # Short dashes
+        'PL': (0, (8, 3)),          # Medium dashes
+        'L': (0, (8, 3)),           # Medium dashes
+        'F': (0, (14, 4)),          # Long dashes
+        'B': (0, (20, 5))           # Extra long dashes
+    }
+
+    # Markers
+    markers = {
+        'Programmatic': 'o',        # Circle
+        'PE': 'v',                  # Triangle Down
+        'PL': '^',                  # Triangle Up
+        'ERL': 's',                 # Square
+        'E': 'D',                   # Diamond
+        'L': 'P',                   # Plus filled
+        'F': 'X',                   # X filled
+        'B': '*'                    # Star
+    }
+
+    ax = plt.gca()
+
     for strategy, data in results.items():
         # Extract steps and determine if event occurred (death) or censored (survived max steps)
         steps = np.array([d[0] for d in data])
@@ -307,7 +344,19 @@ def plot_kaplan_meier(results):
         kmf.fit(steps, event_observed=events, label=label)
         
         # Plot with confidence bands (default in lifelines)
-        kmf.plot_survival_function()
+        c = colors.get(strategy, None)
+        ls = styles.get(strategy, '-')
+        m = markers.get(strategy, None)
+        
+        # Dynamic markevery based on time steps (every 100 steps)
+        times = kmf.survival_function_.index.values
+        # Find indices of times closest to 0, 100, 200, ...
+        target_times = np.arange(0, MAX_STEPS + 1, 100)
+        indices = np.searchsorted(times, target_times)
+        indices = np.clip(indices, 0, len(times) - 1)
+        indices = np.unique(indices)
+        
+        kmf.plot_survival_function(ax=ax, color=c, linestyle=ls, marker=m, markevery=list(indices), markersize=6)
         
     plt.title(f"Kaplan–Meier Survival Curves (N={TRIALS_PER_STRATEGY} per strategy)\nwith 95% Confidence Bands (Greenwood)")
     plt.xlabel('Time (Steps)')

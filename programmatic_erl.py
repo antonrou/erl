@@ -6,8 +6,11 @@ from ERL import Entity, TYPE_AGENT, INPUT_SIZE, DIRS, MAX_ENERGY, MAX_HEALTH, EN
 # --- FAIRNESS CONFIGURATION ---
 # K=2 gives the agent just enough hierarchy to be distinct from the Linear ANN,
 # but simple enough to converge in 2,000 steps.
+# K=2 gives the agent just enough hierarchy to be distinct from the Linear ANN,
+# but simple enough to converge in 2,000 steps.
 K_CLAUSES = 2
 ACTION_SPACE_SIZE = 4 
+
 INPUT_DIM = INPUT_SIZE
 
 # Strategy Configuration
@@ -293,6 +296,7 @@ class ProgrammaticERLAgent(ERLAgent):
     def perform_action(self, world, action_idx):
         dx, dy = DIRS[action_idx]
         nx, ny = self.x + dx, self.y + dy
+        
         if 0 <= nx < WORLD_WIDTH and 0 <= ny < WORLD_HEIGHT:
             occ = world.get_occupant(nx, ny)
             if occ is None:
